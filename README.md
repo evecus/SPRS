@@ -73,6 +73,7 @@ trun --tport <端口> --run "<命令>" [选项]
 | `--dport` | int | — | 代理的 DNS 监听端口，设置后开启 DNS 劫持（:53 → :dport） |
 | `--ipv6` | bool | — | 启用 IPv6 规则，默认 false |
 | `--fakeip` | bool | — | 启用 FakeIP 模式，默认 false |
+| `--lan` | bool | — | 启用局域网代理，默认 false |
 
 ### 示例
 
