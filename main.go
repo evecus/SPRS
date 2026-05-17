@@ -5,60 +5,119 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
 	"syscall"
 
-	"github.com/tproxy/internal/proxy"
+	"github.com/tproxyng/internal/config"
+	"github.com/tproxyng/internal/firewall"
+	"github.com/tproxyng/internal/group"
+	"github.com/tproxyng/internal/process"
 )
 
+const version = "1.0.0"
+
 func main() {
-	var cfg proxy.Config
+	var (
+		cfgPath    string
+		genExample bool
+		showVer    bool
+	)
 
-	flag.IntVar(&cfg.TProxyPort, "tport", 0, "[必须] tproxy 入站端口")
-	flag.StringVar(&cfg.RunCmd, "run", "", "[必须] 启动代理的命令")
-
-	flag.IntVar(&cfg.DNSPort, "dport", 0, "[可选] 代理 DNS 端口，设置后劫持 :53 -> :dport")
-	flag.BoolVar(&cfg.IPv6, "ipv6", false, "[可选] 启用 IPv6 规则")
-	flag.BoolVar(&cfg.FakeIP, "fakeip", false, "[可选] 启用 FakeIP（放行 198.18.0.0/15 和 fc00::/18）")
-	flag.BoolVar(&cfg.LAN, "lan", false, "[可选] 代理局域网其他设备的流量，自动开启 ip_forward")
-
+	flag.StringVar(&cfgPath, "c", "", "config file path (.toml or .json)")
+	flag.BoolVar(&genExample, "example", false, "print example config.toml and exit")
+	flag.BoolVar(&showVer, "v", false, "print version and exit")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "用法: %s --tport <端口> --run \"<命令>\" [选项]\n\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "必要参数:\n")
-		fmt.Fprintf(os.Stderr, "  --tport int     tproxy 入站端口\n")
-		fmt.Fprintf(os.Stderr, "  --run   string  代理启动命令\n\n")
-		fmt.Fprintf(os.Stderr, "可选参数:\n")
-		fmt.Fprintf(os.Stderr, "  --dport  int   代理 DNS 端口（不设置则不劫持 DNS）\n")
-		fmt.Fprintf(os.Stderr, "  --ipv6   bool  启用 IPv6（默认 false）\n")
-		fmt.Fprintf(os.Stderr, "  --fakeip bool  启用 FakeIP 模式（默认 false）\n")
-		fmt.Fprintf(os.Stderr, "  --lan    bool  代理局域网设备流量，自动开启 ip_forward（默认 false）\n\n")
-		fmt.Fprintf(os.Stderr, "示例:\n")
-		fmt.Fprintf(os.Stderr, "  %s --tport 7897 --run \"/usr/bin/sing-box -c config.json\"\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "  %s --tport 7897 --dport 5353 --ipv6 --fakeip --lan --run \"/usr/bin/sing-box -c config.json\"\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "tproxyng %s — transparent proxy manager\n\n", version)
+		fmt.Fprintf(os.Stderr, "Usage:\n")
+		fmt.Fprintf(os.Stderr, "  tproxyng -c config.toml\n")
+		fmt.Fprintf(os.Stderr, "  tproxyng -example > config.toml\n\n")
+		fmt.Fprintf(os.Stderr, "Flags:\n")
+		flag.PrintDefaults()
 	}
-
 	flag.Parse()
 
-	if cfg.TProxyPort == 0 || cfg.RunCmd == "" {
-		fmt.Fprintf(os.Stderr, "错误: --tport 和 --run 为必要参数\n\n")
+	if showVer {
+		fmt.Printf("tproxyng %s\n", version)
+		return
+	}
+	if genExample {
+		fmt.Print(config.ExampleTOML())
+		return
+	}
+	if cfgPath == "" {
+		fmt.Fprintln(os.Stderr, "error: -c <config file> is required")
 		flag.Usage()
 		os.Exit(1)
 	}
 
 	log.SetFlags(log.Ldate | log.Ltime)
-	log.SetPrefix("[tproxy] ")
+	log.SetPrefix("[tproxyng] ")
 
-	mgr, err := proxy.NewManager(cfg)
+	// ── Load config ──────────────────────────────────────────────────────
+	cfg, err := config.Load(cfgPath)
 	if err != nil {
-		log.Fatalf("初始化失败: %v", err)
+		log.Fatalf("config: %v", err)
 	}
-	if err := mgr.Start(); err != nil {
-		log.Fatalf("启动失败: %v", err)
+	logConfig(cfg)
+
+	// ── Ensure proxy group ───────────────────────────────────────────────
+	gid, err := group.Ensure()
+	if err != nil {
+		log.Fatalf("group: %v", err)
+	}
+	log.Printf("group: %q gid=%d", group.GroupName, gid)
+
+	// ── Detect firewall backend ──────────────────────────────────────────
+	// nft preferred; iptables fallback for older kernels.
+	useIPT := false
+	if _, err := exec.LookPath("nft"); err != nil {
+		if _, err2 := exec.LookPath("iptables"); err2 != nil {
+			log.Fatalf("firewall: neither nft nor iptables found in PATH")
+		}
+		log.Println("firewall: nft not found, falling back to iptables")
+		useIPT = true
 	}
 
+	// ── Apply firewall rules ─────────────────────────────────────────────
+	if useIPT {
+		if err := firewall.ApplyIPTables(cfg, gid); err != nil {
+			log.Fatalf("firewall(iptables): %v", err)
+		}
+	} else {
+		if err := firewall.Apply(cfg, gid); err != nil {
+			log.Fatalf("firewall(nft): %v", err)
+		}
+	}
+	log.Println("firewall: rules applied")
+
+	// ── Start proxy process ──────────────────────────────────────────────
+	mgr := process.New(cfg, gid, useIPT)
+	if err := mgr.Start(); err != nil {
+		if useIPT {
+			firewall.StopIPTables()
+		} else {
+			firewall.Stop()
+		}
+		log.Fatalf("process: %v", err)
+	}
+
+	// ── Wait for signal ──────────────────────────────────────────────────
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	s := <-sig
-	log.Printf("收到信号 %s，正在退出", s)
+	log.Printf("received %s, shutting down", s)
+
 	mgr.Stop()
+}
+
+func logConfig(cfg *config.Config) {
+	log.Printf("config: mode=%s tproxy_port=%d redirect_port=%d dns_port=%d tun=%s",
+		cfg.Mode, cfg.TProxyPort, cfg.RedirectPort, cfg.DNSPort, cfg.TunName)
+	log.Printf("config: ipv6=%v lan=%v fakeip=%v hijack_dns=%v",
+		cfg.IPv6, cfg.LAN, cfg.FakeIP, cfg.HijackDNS)
+	log.Printf("config: keepalive=%v restart_on_fail=%v max_restarts=%d watch_interval=%ds",
+		cfg.Keepalive, cfg.RestartOnFail, cfg.MaxRestarts, cfg.WatchInterval)
+	log.Printf("config: cron_restart=%v cron_expr=%q",
+		cfg.CronRestart, cfg.CronExpr)
 }

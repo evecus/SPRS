@@ -1,3 +1,3 @@
-module github.com/tproxy
+module github.com/tproxyng
 
 go 1.22
