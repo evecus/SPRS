@@ -8,12 +8,12 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/tproxyng/internal/config"
+	"github.com/sprs/internal/config"
 )
 
 const (
-	nftTable  = "tproxyng"
-	nftConf   = "/tmp/tproxyng.nft"
+	nftTable  = "sprs"
+	nftConf   = "/tmp/sprs.nft"
 	tpFwMark  = "0x40"
 	tpFwMask  = "0xc0"
 	tpTable   = 100
@@ -415,14 +415,14 @@ func ApplyIPTables(cfg *config.Config, gid uint32) error {
 
 	if cfg.HijackDNS && cfg.DNSPort > 0 {
 		cmds := []string{
-			"iptables -t nat -N TPROXYNG_NAT",
-			fmt.Sprintf("iptables -t nat -A TPROXYNG_NAT -m owner --gid-owner %d -j RETURN", gid),
-			fmt.Sprintf("iptables -t nat -A TPROXYNG_NAT -p tcp --dport %d -j RETURN", cfg.DNSPort),
-			fmt.Sprintf("iptables -t nat -A TPROXYNG_NAT -p udp --dport %d -j RETURN", cfg.DNSPort),
-			fmt.Sprintf("iptables -t nat -A TPROXYNG_NAT -p tcp --dport 53 -j REDIRECT --to-port %d", cfg.DNSPort),
-			fmt.Sprintf("iptables -t nat -A TPROXYNG_NAT -p udp --dport 53 -j REDIRECT --to-port %d", cfg.DNSPort),
-			"iptables -t nat -A OUTPUT -j TPROXYNG_NAT",
-			"iptables -t nat -A PREROUTING -j TPROXYNG_NAT",
+			"iptables -t nat -N SPRS_NAT",
+			fmt.Sprintf("iptables -t nat -A SPRS_NAT -m owner --gid-owner %d -j RETURN", gid),
+			fmt.Sprintf("iptables -t nat -A SPRS_NAT -p tcp --dport %d -j RETURN", cfg.DNSPort),
+			fmt.Sprintf("iptables -t nat -A SPRS_NAT -p udp --dport %d -j RETURN", cfg.DNSPort),
+			fmt.Sprintf("iptables -t nat -A SPRS_NAT -p tcp --dport 53 -j REDIRECT --to-port %d", cfg.DNSPort),
+			fmt.Sprintf("iptables -t nat -A SPRS_NAT -p udp --dport 53 -j REDIRECT --to-port %d", cfg.DNSPort),
+			"iptables -t nat -A OUTPUT -j SPRS_NAT",
+			"iptables -t nat -A PREROUTING -j SPRS_NAT",
 		}
 		for _, c := range cmds {
 			if err := runCmd(c); err != nil {
@@ -436,15 +436,15 @@ func ApplyIPTables(cfg *config.Config, gid uint32) error {
 			return err
 		}
 		cmds := []string{
-			"iptables -t nat -N TPROXYNG_REDIR",
-			fmt.Sprintf("iptables -t nat -A TPROXYNG_REDIR -m owner --gid-owner %d -j RETURN", gid),
-			"iptables -t nat -A TPROXYNG_REDIR -d 127.0.0.0/8 -j RETURN",
-			"iptables -t nat -A TPROXYNG_REDIR -d 10.0.0.0/8 -j RETURN",
-			"iptables -t nat -A TPROXYNG_REDIR -d 172.16.0.0/12 -j RETURN",
-			"iptables -t nat -A TPROXYNG_REDIR -d 192.168.0.0/16 -j RETURN",
-			fmt.Sprintf("iptables -t nat -A TPROXYNG_REDIR -p tcp -j REDIRECT --to-port %d", cfg.RedirectPort),
-			"iptables -t nat -A OUTPUT -p tcp -j TPROXYNG_REDIR",
-			"iptables -t nat -A PREROUTING -p tcp -j TPROXYNG_REDIR",
+			"iptables -t nat -N SPRS_REDIR",
+			fmt.Sprintf("iptables -t nat -A SPRS_REDIR -m owner --gid-owner %d -j RETURN", gid),
+			"iptables -t nat -A SPRS_REDIR -d 127.0.0.0/8 -j RETURN",
+			"iptables -t nat -A SPRS_REDIR -d 10.0.0.0/8 -j RETURN",
+			"iptables -t nat -A SPRS_REDIR -d 172.16.0.0/12 -j RETURN",
+			"iptables -t nat -A SPRS_REDIR -d 192.168.0.0/16 -j RETURN",
+			fmt.Sprintf("iptables -t nat -A SPRS_REDIR -p tcp -j REDIRECT --to-port %d", cfg.RedirectPort),
+			"iptables -t nat -A OUTPUT -p tcp -j SPRS_REDIR",
+			"iptables -t nat -A PREROUTING -p tcp -j SPRS_REDIR",
 		}
 		for _, c := range cmds {
 			if err := runCmd(c); err != nil {
@@ -460,14 +460,14 @@ func ApplyIPTables(cfg *config.Config, gid uint32) error {
 
 func StopIPTables() {
 	cmds := []string{
-		"iptables -t nat -D OUTPUT -j TPROXYNG_NAT",
-		"iptables -t nat -D PREROUTING -j TPROXYNG_NAT",
-		"iptables -t nat -F TPROXYNG_NAT",
-		"iptables -t nat -X TPROXYNG_NAT",
-		"iptables -t nat -D OUTPUT -p tcp -j TPROXYNG_REDIR",
-		"iptables -t nat -D PREROUTING -p tcp -j TPROXYNG_REDIR",
-		"iptables -t nat -F TPROXYNG_REDIR",
-		"iptables -t nat -X TPROXYNG_REDIR",
+		"iptables -t nat -D OUTPUT -j SPRS_NAT",
+		"iptables -t nat -D PREROUTING -j SPRS_NAT",
+		"iptables -t nat -F SPRS_NAT",
+		"iptables -t nat -X SPRS_NAT",
+		"iptables -t nat -D OUTPUT -p tcp -j SPRS_REDIR",
+		"iptables -t nat -D PREROUTING -p tcp -j SPRS_REDIR",
+		"iptables -t nat -F SPRS_REDIR",
+		"iptables -t nat -X SPRS_REDIR",
 	}
 	for _, c := range cmds { _ = runCmd(c) }
 	if activeCfg != nil {

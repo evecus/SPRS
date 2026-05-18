@@ -250,7 +250,7 @@ func floatVal(s string) (float64, error) {
 }
 
 func ExampleTOML() string {
-	return `# tproxyng 配置文件
+	return `# sprs 配置文件
 # 布尔值不填写默认为 false
 
 # 代理核心启动命令（必填）

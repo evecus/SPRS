@@ -9,10 +9,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/tproxyng/internal/config"
-	"github.com/tproxyng/internal/firewall"
-	"github.com/tproxyng/internal/group"
-	"github.com/tproxyng/internal/process"
+	"github.com/sprs/internal/config"
+	"github.com/sprs/internal/firewall"
+	"github.com/sprs/internal/group"
+	"github.com/sprs/internal/process"
 )
 
 const version = "1.0.0"
@@ -27,13 +27,13 @@ func main() {
 	flag.BoolVar(&genExample, "example", false, "print example config.toml and exit")
 	flag.BoolVar(&showVer, "v", false, "print version and exit")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "tproxyng %s\n\nUsage:\n  tproxyng -c config.toml\n  tproxyng -example > config.toml\n\n", version)
+		fmt.Fprintf(os.Stderr, "sprs %s\n\nUsage:\n  sprs -c config.toml\n  sprs -example > config.toml\n\n", version)
 		flag.PrintDefaults()
 	}
 	flag.Parse()
 
 	if showVer {
-		fmt.Printf("tproxyng %s\n", version)
+		fmt.Printf("sprs %s\n", version)
 		return
 	}
 	if genExample {
@@ -47,7 +47,7 @@ func main() {
 	}
 
 	log.SetFlags(log.Ldate | log.Ltime)
-	log.SetPrefix("[tproxyng] ")
+	log.SetPrefix("[sprs] ")
 
 	// ── Load + validate config ───────────────────────────────────────────
 	cfg, err := config.Load(cfgPath)

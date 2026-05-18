@@ -1,4 +1,4 @@
-// Package group ensures the tproxyng system group exists.
+// Package group ensures the sprs system group exists.
 // Logic copied from Singa's core/manager.go ensureSingaGroup / writeGroupEntry.
 package group
 
@@ -12,9 +12,9 @@ import (
 	"strings"
 )
 
-const GroupName = "tproxyng"
+const GroupName = "sprs"
 
-// Ensure looks up or creates the tproxyng system group and returns its GID.
+// Ensure looks up or creates the sprs system group and returns its GID.
 func Ensure() (uint32, error) {
 	if g, err := user.LookupGroup(GroupName); err == nil {
 		gid, err := strconv.ParseUint(g.Gid, 10, 32)

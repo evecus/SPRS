@@ -1,3 +1,3 @@
-module github.com/tproxyng
+module github.com/sprs
 
 go 1.22

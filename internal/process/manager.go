@@ -13,9 +13,9 @@ import (
 	"time"
 	"os/exec"
 
-	"github.com/tproxyng/internal/config"
-	"github.com/tproxyng/internal/cronrestart"
-	"github.com/tproxyng/internal/firewall"
+	"github.com/sprs/internal/config"
+	"github.com/sprs/internal/cronrestart"
+	"github.com/sprs/internal/firewall"
 )
 
 type Manager struct {
