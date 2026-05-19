@@ -104,6 +104,10 @@ func buildProxyRuleChain(cfg *config.Config, modes config.ProxyModes) string {
 		s.WriteString("        meta mark set ct mark\n")
 		s.WriteString(fmt.Sprintf("        meta mark & %s == %s return\n", tunFwMask, tunFwMark))
 	}
+	// bypass mark: skip proxy for traffic with this mark (independent of group)
+	if cfg.BypassMark > 0 {
+		s.WriteString(fmt.Sprintf("        meta mark 0x%x return\n", cfg.BypassMark))
+	}
 	s.WriteString(privateRangesV4(cfg.FakeIP, cfg.FakeIPv4Range))
 	if cfg.IPv6 {
 		s.WriteString(privateRangesV6(cfg.FakeIP, cfg.FakeIPv6Range))
@@ -249,6 +253,12 @@ func Apply(cfg *config.Config, gid uint32) error {
 	}
 
 	SyncLocalIPs(cfg.IPv6)
+
+	// bypass mark ip rule (independent of nft group exemption)
+	if cfg.BypassMark > 0 {
+		setupBypassMarkRoute(cfg.BypassMark, cfg.IPv6)
+	}
+
 	return nil
 }
 
@@ -265,6 +275,17 @@ func Stop() {
 	if activeCfg != nil {
 		cleanupRoutes(activeCfg, activeModes)
 	}
+	activeCfg = nil
+	activeModes = config.ProxyModes{}
+}
+
+// StopWithConfig tears down rules/routes using an explicit config.
+// Used by --stop flag (activeCfg may not be set if sprs never ran Apply).
+func StopWithConfig(cfg *config.Config) {
+	_ = runCmd(fmt.Sprintf("nft delete table inet %s", nftTable))
+	_ = os.Remove(nftConf)
+	modes := cfg.Modes()
+	cleanupRoutes(cfg, modes)
 	activeCfg = nil
 	activeModes = config.ProxyModes{}
 }
@@ -294,6 +315,9 @@ func cleanupRoutes(cfg *config.Config, modes config.ProxyModes) {
 	if modes.NeedsTunInbound() {
 		cleanupTunRoutes(cfg)
 	}
+	if cfg.BypassMark > 0 {
+		cleanupBypassMarkRoute(cfg.BypassMark, cfg.IPv6)
+	}
 }
 
 // setupTProxyRoutes returns error: if ip rule/route fail, tproxy won't work at all.
@@ -314,6 +338,37 @@ func setupTProxyRoutes(ipv6 bool) error {
 		}
 	}
 	return nil
+}
+
+// setupBypassMarkRoute adds an ip rule so traffic with bypassMark is routed
+// via the main table (i.e. bypasses tproxy/tun routing tables).
+func setupBypassMarkRoute(mark uint32, ipv6 bool) {
+	// Priority 100 — before tproxy rule (priority ~32765)
+	cmds := []string{
+		fmt.Sprintf("ip rule add fwmark 0x%x/0x%x table main priority 100", mark, mark),
+	}
+	if ipv6 {
+		cmds = append(cmds,
+			fmt.Sprintf("ip -6 rule add fwmark 0x%x/0x%x table main priority 100", mark, mark),
+		)
+	}
+	for _, c := range cmds {
+		if err := runCmd(c); err != nil {
+			log.Printf("firewall: bypass mark route: %v", err)
+		}
+	}
+}
+
+func cleanupBypassMarkRoute(mark uint32, ipv6 bool) {
+	cmds := []string{
+		fmt.Sprintf("ip rule del fwmark 0x%x/0x%x table main priority 100", mark, mark),
+	}
+	if ipv6 {
+		cmds = append(cmds,
+			fmt.Sprintf("ip -6 rule del fwmark 0x%x/0x%x table main priority 100", mark, mark),
+		)
+	}
+	for _, c := range cmds { _ = runCmd(c) }
 }
 
 func setupTunRoutes(cfg *config.Config) {
