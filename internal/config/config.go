@@ -59,6 +59,10 @@ type Config struct {
 	// 带此 mark 的流量在 nft 规则和路由中均被跳过
 	BypassMark uint32 `json:"mark"`
 
+	// 额外豁免 GID（数值，与 mark 豁免完全独立）
+	// 这些 GID 的进程流量不走代理，等同于 sprs 组
+	BypassGIDs []uint32 `json:"bypass_gids"`
+
 	// 启动等待
 	StartWaitTime        int      `json:"start_wait_time"`   // 启动后等待 N 秒再配规则/启核心，0=不等
 	WaitProcess          []string `json:"wait_process"`      // 等待这些完整进程名全部出现后再启动
@@ -248,6 +252,10 @@ func setField(cfg *Config, key, val string) error {
 	case "wait_process_timeout":    if ierr == nil { cfg.WaitProcessTimeout = i };     return ierr
 	// uint32
 	case "mark":                    if uerr == nil { cfg.BypassMark = u };             return uerr
+	// uint32 array: bypass_gids = [1000, 65534]
+	case "bypass_gids":
+		cfg.BypassGIDs = parseUint32Array(val)
+		return nil
 	// float
 	case "max_cpu_percent":         if ferr == nil { cfg.MaxCPUPct = f };              return ferr
 	// bools
@@ -280,6 +288,30 @@ func parseStringArray(s string) []string {
 		part = strings.Trim(part, `"`)
 		if part != "" {
 			result = append(result, part)
+		}
+	}
+	return result
+}
+
+// parseUint32Array parses TOML inline arrays of integers/hex: [1000, 0xff, 65534]
+func parseUint32Array(s string) []uint32 {
+	s = strings.TrimSpace(s)
+	if !strings.HasPrefix(s, "[") || !strings.HasSuffix(s, "]") {
+		// single bare value
+		if v, err := uintVal(strings.TrimSpace(s)); err == nil {
+			return []uint32{v}
+		}
+		return nil
+	}
+	s = s[1 : len(s)-1]
+	var result []uint32
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if v, err := uintVal(part); err == nil {
+			result = append(result, v)
 		}
 	}
 	return result
@@ -355,6 +387,11 @@ fakeip     = false   # FakeIP 模式
 # 带此 fwmark 的流量跳过所有代理规则和路由，不依赖 group
 # 不填则不开启此功能（group 豁免始终有效）
 # mark = 0xff
+
+# ── GID 豁免（可选）──────────────────────────────────────────
+# 额外指定的 GID，这些 GID 的进程流量不走代理，等同于 sprs 组
+# 与 mark 豁免完全独立，互不影响
+# bypass_gids = [1000, 65534]
 
 # ── 启动等待 ──────────────────────────────────────────────────
 # sprs 启动后先等待 N 秒再配置规则和路由（0 或不填 = 不等待）

@@ -177,6 +177,9 @@ func logConfig(cfg *config.Config) {
 	if cfg.BypassMark > 0 {
 		log.Printf("config: bypass mark=0x%x", cfg.BypassMark)
 	}
+	if len(cfg.BypassGIDs) > 0 {
+		log.Printf("config: bypass_gids=%v", cfg.BypassGIDs)
+	}
 	if cfg.StartWaitTime > 0 {
 		log.Printf("config: start_wait_time=%ds", cfg.StartWaitTime)
 	}

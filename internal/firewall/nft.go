@@ -166,7 +166,7 @@ func buildManglePrerouting(cfg *config.Config, modes config.ProxyModes) string {
 func buildMangleOutput(cfg *config.Config, modes config.ProxyModes, gid uint32) string {
 	var s strings.Builder
 	s.WriteString("\n    chain proxy_out {\n")
-	s.WriteString(fmt.Sprintf("        skgid %d return\n", gid))
+	s.WriteString(fmt.Sprintf("        %s\n", nftSkgidExpr(gid, cfg.BypassGIDs)))
 	nfproto := "meta nfproto ipv4"
 	if cfg.IPv6 {
 		nfproto = "meta nfproto { ipv4, ipv6 }"
@@ -178,14 +178,15 @@ func buildMangleOutput(cfg *config.Config, modes config.ProxyModes, gid uint32) 
 
 func buildNATChains(cfg *config.Config, modes config.ProxyModes, gid uint32) string {
 	var s strings.Builder
+	skgid := nftSkgidExpr(gid, cfg.BypassGIDs)
 	if cfg.HijackDNS && cfg.DNSPort > 0 {
 		dnsV4 := fmt.Sprintf("        ip daddr != 127.0.0.1 meta l4proto { tcp, udp } th dport 53 redirect to :%d\n", cfg.DNSPort)
 		dnsV6 := ""
 		if cfg.IPv6 {
 			dnsV6 = fmt.Sprintf("        ip6 daddr != ::1 meta l4proto { tcp, udp } th dport 53 redirect to :%d\n", cfg.DNSPort)
 		}
-		s.WriteString(fmt.Sprintf("\n    chain dns_redirect {\n        skgid %d return\n        meta l4proto { tcp, udp } th dport %d return\n%s%s    }\n",
-			gid, cfg.DNSPort, dnsV4, dnsV6))
+		s.WriteString(fmt.Sprintf("\n    chain dns_redirect {\n        %s\n        meta l4proto { tcp, udp } th dport %d return\n%s%s    }\n",
+			skgid, cfg.DNSPort, dnsV4, dnsV6))
 	}
 	if modes.TCP == config.TCPModeRedir {
 		nfproto := "meta nfproto ipv4"
@@ -196,8 +197,8 @@ func buildNATChains(cfg *config.Config, modes config.ProxyModes, gid uint32) str
 		if cfg.IPv6 {
 			v6 = privateRangesV6(cfg.FakeIP, cfg.FakeIPv6Range)
 		}
-		s.WriteString(fmt.Sprintf("\n    chain tcp_redirect {\n        skgid %d return\n%s%s        ip daddr @interface return\n        %s meta l4proto tcp redirect to :%d\n    }\n",
-			gid, privateRangesV4(cfg.FakeIP, cfg.FakeIPv4Range), v6, nfproto, cfg.RedirectPort))
+		s.WriteString(fmt.Sprintf("\n    chain tcp_redirect {\n        %s\n%s%s        ip daddr @interface return\n        %s meta l4proto tcp redirect to :%d\n    }\n",
+			skgid, privateRangesV4(cfg.FakeIP, cfg.FakeIPv4Range), v6, nfproto, cfg.RedirectPort))
 	}
 	s.WriteString("\n    chain prerouting_nat {\n        type nat hook prerouting priority dstnat - 5; policy accept;\n")
 	if cfg.HijackDNS && cfg.DNSPort > 0 {
@@ -218,7 +219,30 @@ func buildNATChains(cfg *config.Config, modes config.ProxyModes, gid uint32) str
 	return s.String()
 }
 
-// Apply sets up nft rules. Returns error if ANY step fails — caller must not start the proxy.
+// nftSkgidExpr builds a nft skgid match expression that exempts the sprs gid
+// and any additional bypass_gids. When there is more than one gid, nft set
+// syntax is used: skgid { gid1, gid2, ... } return
+func nftSkgidExpr(sprsGID uint32, bypassGIDs []uint32) string {
+	// deduplicate: collect all gids, sprs gid first
+	seen := map[uint32]bool{sprsGID: true}
+	all := []uint32{sprsGID}
+	for _, g := range bypassGIDs {
+		if !seen[g] {
+			seen[g] = true
+			all = append(all, g)
+		}
+	}
+	if len(all) == 1 {
+		return fmt.Sprintf("skgid %d return", all[0])
+	}
+	parts := make([]string, len(all))
+	for i, g := range all {
+		parts[i] = fmt.Sprintf("%d", g)
+	}
+	return fmt.Sprintf("skgid { %s } return", strings.Join(parts, ", "))
+}
+
+
 func Apply(cfg *config.Config, gid uint32) error {
 	Stop() // clean previous state first
 
@@ -470,17 +494,24 @@ func ApplyIPTables(cfg *config.Config, gid uint32) error {
 	activeCfg = cfg
 	activeModes = modes
 
+	// allExemptGIDs = sprs gid + bypass_gids (deduplicated)
+	allExemptGIDs := gidList(gid, cfg.BypassGIDs)
+
 	if cfg.HijackDNS && cfg.DNSPort > 0 {
 		cmds := []string{
 			"iptables -t nat -N SPRS_NAT",
-			fmt.Sprintf("iptables -t nat -A SPRS_NAT -m owner --gid-owner %d -j RETURN", gid),
+		}
+		for _, g := range allExemptGIDs {
+			cmds = append(cmds, fmt.Sprintf("iptables -t nat -A SPRS_NAT -m owner --gid-owner %d -j RETURN", g))
+		}
+		cmds = append(cmds,
 			fmt.Sprintf("iptables -t nat -A SPRS_NAT -p tcp --dport %d -j RETURN", cfg.DNSPort),
 			fmt.Sprintf("iptables -t nat -A SPRS_NAT -p udp --dport %d -j RETURN", cfg.DNSPort),
 			fmt.Sprintf("iptables -t nat -A SPRS_NAT -p tcp --dport 53 -j REDIRECT --to-port %d", cfg.DNSPort),
 			fmt.Sprintf("iptables -t nat -A SPRS_NAT -p udp --dport 53 -j REDIRECT --to-port %d", cfg.DNSPort),
 			"iptables -t nat -A OUTPUT -j SPRS_NAT",
 			"iptables -t nat -A PREROUTING -j SPRS_NAT",
-		}
+		)
 		for _, c := range cmds {
 			if err := runCmd(c); err != nil {
 				log.Printf("firewall(iptables): %v", err)
@@ -494,7 +525,11 @@ func ApplyIPTables(cfg *config.Config, gid uint32) error {
 		}
 		cmds := []string{
 			"iptables -t nat -N SPRS_REDIR",
-			fmt.Sprintf("iptables -t nat -A SPRS_REDIR -m owner --gid-owner %d -j RETURN", gid),
+		}
+		for _, g := range allExemptGIDs {
+			cmds = append(cmds, fmt.Sprintf("iptables -t nat -A SPRS_REDIR -m owner --gid-owner %d -j RETURN", g))
+		}
+		cmds = append(cmds,
 			"iptables -t nat -A SPRS_REDIR -d 127.0.0.0/8 -j RETURN",
 			"iptables -t nat -A SPRS_REDIR -d 10.0.0.0/8 -j RETURN",
 			"iptables -t nat -A SPRS_REDIR -d 172.16.0.0/12 -j RETURN",
@@ -502,7 +537,7 @@ func ApplyIPTables(cfg *config.Config, gid uint32) error {
 			fmt.Sprintf("iptables -t nat -A SPRS_REDIR -p tcp -j REDIRECT --to-port %d", cfg.RedirectPort),
 			"iptables -t nat -A OUTPUT -p tcp -j SPRS_REDIR",
 			"iptables -t nat -A PREROUTING -p tcp -j SPRS_REDIR",
-		}
+		)
 		for _, c := range cmds {
 			if err := runCmd(c); err != nil {
 				log.Printf("firewall(iptables): %v", err)
@@ -513,6 +548,20 @@ func ApplyIPTables(cfg *config.Config, gid uint32) error {
 		enableIPForward(cfg.IPv6)
 	}
 	return nil
+}
+
+// gidList returns a deduplicated slice starting with sprsGID followed by any
+// additional bypass_gids that differ from it.
+func gidList(sprsGID uint32, bypassGIDs []uint32) []uint32 {
+	seen := map[uint32]bool{sprsGID: true}
+	all := []uint32{sprsGID}
+	for _, g := range bypassGIDs {
+		if !seen[g] {
+			seen[g] = true
+			all = append(all, g)
+		}
+	}
+	return all
 }
 
 func StopIPTables() {
