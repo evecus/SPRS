@@ -99,7 +99,7 @@ func buildTable(cfg *config.Config, modes config.ProxyModes, gid uint32) string 
     }
 
     chain output_mangle {
-        type route hook output priority mangle - 5; policy accept;
+        type filter hook output priority mangle - 5; policy accept;
         jump proxy_out
     }
 `))
@@ -112,11 +112,11 @@ func buildProxyRuleChain(cfg *config.Config, modes config.ProxyModes) string {
 	var s strings.Builder
 	s.WriteString("\n    chain proxy_rule {\n")
 	if modes.NeedsTProxyInbound() {
-		s.WriteString("        meta mark set ct mark\n")
+		s.WriteString("        ct mark != 0 meta mark set ct mark\n")
 		s.WriteString(fmt.Sprintf("        meta mark & %s == %s return\n", tpFwMask, tpFwMark))
 	}
 	if modes.NeedsTunInbound() {
-		s.WriteString("        meta mark set ct mark\n")
+		s.WriteString("        ct mark != 0 meta mark set ct mark\n")
 		s.WriteString(fmt.Sprintf("        meta mark & %s == %s return\n", tunFwMask, tunFwMark))
 	}
 	// bypass mark: skip proxy for traffic with this mark (independent of group)
@@ -210,8 +210,12 @@ func buildNATChains(cfg *config.Config, modes config.ProxyModes, gid uint32) str
 		if cfg.IPv6 {
 			dnsV6 = fmt.Sprintf("        ip6 daddr != ::1 meta l4proto { tcp, udp } th dport 53 redirect to :%d\n", cfg.DNSPort)
 		}
-		s.WriteString(fmt.Sprintf("\n    chain dns_redirect {\n        %s\n        meta l4proto { tcp, udp } th dport %d return\n%s%s    }\n",
-			skgid, cfg.DNSPort, dnsV4, dnsV6))
+		markExempt := ""
+		if cfg.BypassMark > 0 {
+			markExempt = fmt.Sprintf("        meta mark 0x%x return\n", cfg.BypassMark)
+		}
+		s.WriteString(fmt.Sprintf("\n    chain dns_redirect {\n        %s\n%s        meta l4proto { tcp, udp } th dport %d return\n%s%s    }\n",
+			skgid, markExempt, cfg.DNSPort, dnsV4, dnsV6))
 	}
 	if modes.TCP == config.TCPModeRedir {
 		nfproto := "meta nfproto ipv4"
@@ -222,8 +226,12 @@ func buildNATChains(cfg *config.Config, modes config.ProxyModes, gid uint32) str
 		if cfg.IPv6 {
 			v6 = privateRangesV6(cfg.FakeIP, cfg.FakeIPv6Range)
 		}
-		s.WriteString(fmt.Sprintf("\n    chain tcp_redirect {\n        %s\n%s%s        ip daddr @interface return\n        %s meta l4proto tcp redirect to :%d\n    }\n",
-			skgid, privateRangesV4(cfg.FakeIP, cfg.FakeIPv4Range), v6, nfproto, cfg.RedirectPort))
+		markExempt := ""
+		if cfg.BypassMark > 0 {
+			markExempt = fmt.Sprintf("        meta mark 0x%x return\n", cfg.BypassMark)
+		}
+		s.WriteString(fmt.Sprintf("\n    chain tcp_redirect {\n        %s\n%s%s%s        ip daddr @interface return\n        %s meta l4proto tcp redirect to :%d\n    }\n",
+			skgid, markExempt, privateRangesV4(cfg.FakeIP, cfg.FakeIPv4Range), v6, nfproto, cfg.RedirectPort))
 	}
 	s.WriteString("\n    chain prerouting_nat {\n        type nat hook prerouting priority dstnat - 5; policy accept;\n")
 	if cfg.HijackDNS && cfg.DNSPort > 0 {
