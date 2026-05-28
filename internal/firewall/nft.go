@@ -205,10 +205,10 @@ func buildNATChains(cfg *config.Config, modes config.ProxyModes, gid uint32) str
 	var s strings.Builder
 	skgid := nftSkgidExpr(gid, cfg.BypassGIDs)
 	if cfg.HijackDNS && cfg.DNSPort > 0 {
-		dnsV4 := fmt.Sprintf("        ip daddr != 127.0.0.0/8 meta l4proto { tcp, udp } th dport 53 redirect to :%d\n", cfg.DNSPort)
+		dnsV4 := fmt.Sprintf("        ip daddr != 127.0.0.1 meta l4proto { tcp, udp } th dport 53 redirect to :%d\n", cfg.DNSPort)
 		dnsV6 := ""
 		if cfg.IPv6 {
-			dnsV6 = fmt.Sprintf("        ip6 daddr != ::1/128 meta l4proto { tcp, udp } th dport 53 redirect to :%d\n", cfg.DNSPort)
+			dnsV6 = fmt.Sprintf("        ip6 daddr != ::1 meta l4proto { tcp, udp } th dport 53 redirect to :%d\n", cfg.DNSPort)
 		}
 		markExempt := ""
 		if cfg.BypassMark > 0 {
@@ -540,7 +540,6 @@ func ApplyIPTables(cfg *config.Config, gid uint32) error {
 		cmds = append(cmds,
 			fmt.Sprintf("iptables -t nat -A SPRS_NAT -p tcp --dport %d -j RETURN", cfg.DNSPort),
 			fmt.Sprintf("iptables -t nat -A SPRS_NAT -p udp --dport %d -j RETURN", cfg.DNSPort),
-			"iptables -t nat -A SPRS_NAT -d 127.0.0.0/8 -j RETURN",
 			fmt.Sprintf("iptables -t nat -A SPRS_NAT -p tcp --dport 53 -j REDIRECT --to-port %d", cfg.DNSPort),
 			fmt.Sprintf("iptables -t nat -A SPRS_NAT -p udp --dport 53 -j REDIRECT --to-port %d", cfg.DNSPort),
 			"iptables -t nat -A OUTPUT -j SPRS_NAT",
